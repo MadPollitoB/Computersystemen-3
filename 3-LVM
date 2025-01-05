@@ -1,0 +1,186 @@
+# Lab 3: Logical Volume Manager (LVM) Configuration
+
+## Prerequisites
+- CentOS 9 Stream ISO image
+- VirtualBox
+- RAM: 2048MB
+- Two identical 20GB disks: `raiddisk1.vmdk`, `raiddisk2.vmdk`
+
+## References
+- [Tuxfixer - CentOS RAID1 Installation](http://www.tuxfixer.com/centos-7-installation-with-lvm-raid-1-mirroring)
+- [The Geek Diary - Add PV to VG](https://www.thegeekdiary.com/centos-rhel-how-to-add-physical-volume-pv-to-a-volume-group-vg-in-lvm/)
+- [Techotopia - Adding Disk to VG](https://www.techotopia.com/index.php/Adding_a_New_Disk_to_a_Fedora_Volume_Group_and_Logical_Volume)
+- [HowToForge - Replacing Disks in RAID](http://www.howtoforge.com/replacing_hard_disks_in_a_raid1_array)
+- [YouTube - Installation Video](https://www.youtube.com/watch?v=4p2TH7Fwvqs)
+
+---
+
+## Step-by-Step Plan for VirtualBox Setup
+
+### 1. Download and Install VirtualBox
+- Download VirtualBox from the [official website](https://www.virtualbox.org/).
+- Install VirtualBox on your system following the provided instructions.
+
+### 2. Create a New Virtual Machine
+1. **Open VirtualBox** and click `New`.
+2. Name the VM (e.g., `CentOS9_LVM`) and select:
+   - Type: `Linux`
+   - Version: `Red Hat (64-bit)`
+3. Assign **RAM:** 2048MB.
+4. Click `Create` to add a virtual hard disk.
+5. Choose `VDI` (Virtual Disk Image) and `Dynamically allocated`.
+6. Set the size to **20GB** for the first disk.
+
+### 3. Add a Second Virtual Disk
+1. Go to `Settings` > `Storage`.
+2. Click the `Controller: SATA` and then the `+` button to add a new disk.
+3. Create a new disk of size **20GB** (same as the first disk).
+4. Save your changes.
+
+### 4. Add Extra Disks
+1. Repeat the process above to add two additional disks:
+   - 100MB disk (for `/dev/sdc`).
+   - 200MB disk (for `/dev/sdd`).
+
+### 5. Add a Network Adapter
+1. Go to `Settings` > `Network`.
+2. Select `Adapter 1` and choose `Bridged Adapter` for better connectivity.
+3. Ensure the adapter connects to your host network interface.
+
+### 6. Mount the CentOS ISO
+1. Go to `Settings` > `Storage`.
+2. Under `Controller: IDE`, click the `Empty` slot.
+3. Click the CD icon and choose `Choose a disk file...`.
+4. Select the CentOS 9 Stream ISO image.
+5. Save and start the virtual machine.
+
+---
+
+## Step-by-Step Plan for CentOS Installation Using GUI
+
+### 1. Start Installation
+1. Boot the virtual machine with the CentOS ISO mounted.
+2. Select `Install CentOS Stream 9` from the boot menu.
+3. Set the language and keyboard layout as desired.
+
+### 2. Configure Storage (Manual Partitioning)
+1. Select `Installation Destination` and choose the two 20GB disks (`/dev/sda` and `/dev/sdb`).
+2. Choose `Custom` for partitioning.
+
+### 3. Create Partitions and RAID
+#### Partition 1 for `/boot`:
+1. Select `/dev/sda` and `/dev/sdb`.
+2. Create a partition of size **500MB** on both disks.
+3. Set the mount point to `/boot`.
+4. Configure as RAID1:
+   - Select both partitions and click `Create RAID`.
+   - Choose RAID1.
+   - Assign the name `/dev/md0`.
+5. Format as `ext4`.
+
+#### Partition 2 for LVM:
+1. Use the remaining space on `/dev/sda` and `/dev/sdb`.
+2. Create a partition and assign it to RAID1:
+   - Select both partitions and click `Create RAID`.
+   - Choose RAID1.
+   - Assign the name `/dev/md1`.
+3. Mark the RAID device as `LVM`.
+
+### 4. Configure Logical Volumes
+1. Select `/dev/md1` and click `Create Volume Group`.
+   - Name the group `VolGroup`.
+2. Create two logical volumes within the group:
+   - **Swap Volume**:
+     - Name: `LogVol00`
+     - Size: **1GB**
+     - Mount point: `swap`
+   - **Root Volume**:
+     - Name: `LogVol01`
+     - Use all remaining space.
+     - Mount point: `/`.
+3. Format `/` as `ext4`.
+
+### 5. Add the Extra 100MB Disk for `/home`
+1. Go back to the `Installation Destination`.
+2. Select `/dev/sdc` and create a partition of size 100MB.
+3. Mark the partition as `LVM`.
+4. Add it to a new volume group:
+   - Name: `VolGroupHome`.
+5. Create a logical volume:
+   - Name: `LogVolHome`.
+   - Use all available space.
+   - Mount point: `/home`.
+6. Format `/home` as `ext4`.
+
+### 6. Extend `/home` with the 200MB Disk
+1. After installation, power off the VM and add the 200MB disk (`/dev/sdd`).
+2. Boot into the installed CentOS system.
+3. Use the following commands:
+   ```bash
+   fdisk /dev/sdd
+   # Create a single partition on /dev/sdd
+   pvcreate /dev/sdd1
+   vgextend VolGroupHome /dev/sdd1
+   lvextend -l +100%FREE /dev/VolGroupHome/LogVolHome
+   resize2fs /dev/VolGroupHome/LogVolHome
+   ```
+
+### 7. Test RAID
+1. Check RAID status:
+   ```bash
+   cat /proc/mdstat
+   ```
+2. Test by removing one disk:
+   - Power off the VM.
+   - Remove one of the RAID disks (`/dev/sda` or `/dev/sdb`).
+   - Boot and check RAID status again.
+
+---
+
+## Automation Script
+Save this script as `lvm_setup.sh` and run with root privileges.
+
+```bash
+#!/bin/bash
+set -e
+
+# Partition disks
+echo "Partitioning disks..."
+echo -e "n\np\n1\n\n+500M\nw" | fdisk /dev/sda
+echo -e "n\np\n1\n\n+500M\nw" | fdisk /dev/sdb
+
+# Create RAID arrays
+mdadm --create --verbose /dev/md0 --level=1 --raid-devices=2 /dev/sda1 /dev/sdb1
+mdadm --create --verbose /dev/md1 --level=1 --raid-devices=2 /dev/sda2 /dev/sdb2
+
+# Format and mount RAID arrays
+mkfs.ext4 /dev/md0
+mkfs.ext4 /dev/md1
+
+# Configure LVM
+pvcreate /dev/md1
+vgcreate VolGroup /dev/md1
+lvcreate -L 1G -n LogVol00 VolGroup
+lvcreate -l 100%FREE -n LogVol01 VolGroup
+mkfs.ext4 /dev/VolGroup/LogVol01
+
+# Add 100MB disk
+pvcreate /dev/sdc1
+vgcreate VolGroupHome /dev/sdc1
+lvcreate -l 100%FREE -n LogVolHome VolGroupHome
+mkfs.ext4 /dev/VolGroupHome/LogVolHome
+mount /dev/VolGroupHome/LogVolHome /home
+
+# Extend /home with 200MB disk
+pvcreate /dev/sdd1
+vgextend VolGroupHome /dev/sdd1
+lvextend -l +100%FREE /dev/VolGroupHome/LogVolHome
+resize2fs /dev/VolGroupHome/LogVolHome
+
+# Test RAID
+cat /proc/mdstat > /root/raidok.txt
+```
+
+---
+
+Save and follow these steps for a successful Lab 3 completion.
